@@ -1,6 +1,6 @@
 FROM jenkins/jenkins:lts-alpine
 USER root
-RUN apk add --no-cache --update python3 docker && \
+RUN apk add --no-cache --update python3 docker cmd:pip3 && \
      pip3 install -U pip
 RUN  pip3 install -U -i https://test.pypi.org/simple/ pyport
 RUN addgroup jenkins ping
