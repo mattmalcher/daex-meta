@@ -30,7 +30,7 @@ services:
       placement:
         constraints: [node.role == manager]
     extra_hosts:
-      - "docker.service:192.168.1.64"
+      - "docker.service:127.0.0.1"
     ports:
       - 9000:9000 
 volumes:
