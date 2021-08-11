@@ -3,15 +3,15 @@
 Fork of ren-hoek's daex platform scripts. For learning how it all hangs together
 
 # Requirements
+The following are prerequisites for getting this all up and running:
 
-Docker
-Docker Swarm
-python3: 
+* Docker
+* Docker Swarm
+* python3: 
     * [pyport](https://github.com/ren-hoek/pyport) - a wrapper around the portainer API
 
-Access to docker.io to pull down images 
-
-Locally running docker container registry
+* Access to dockerhub to pull down images 
+* Locally running docker container registry?
 
 # Components
 
@@ -35,12 +35,12 @@ When running it is accessible on port 5000.
 
 There is a [registry API](https://docs.docker.com/registry/spec/api/)
 
-For example, to list repositories on a locally running registry: http://localhost:5000/v2/_catalog
+For example, to list repositories on a locally running registry: http://localhost:5000/v2/_catalog. (or in our case http://docker.service:5000/v2/_catalog)
 
 The registry has its own volume 'data'
 
-
 https://docs.docker.com/engine/swarm/stack-deploy/#set-up-a-docker-registry
+
 
 ## Gitlab
 
@@ -197,7 +197,8 @@ OK - I think the issue is that portainer's docker compose defines docker.service
 
 Need to fix this & start again I think!
 
-* Attempt 1 - point docker.service at localhost (i.e. 127.0.0.1)
+* Attempt 1 - point docker.service at localhost (i.e. 127.0.0.1) using extra.hosts option in the docker-compose file for the portainer stack?
+* Attempt 2 - What about making the hosts file point docker.service -> 127.0.0.1 ?
 
 ## freeipa no longer has a latest tag
 
@@ -205,10 +206,76 @@ the dockerfile at `stacks/freeipa` specifies: `FROM freeipa/freeipa-server` whic
 
 fix: change dockerfile to read: `FROM freeipa/freeipa-server:centos-8`
 
+## freeipa bootlooping
+
+Freeipa doesnt seem to start up correctly and keeps trying to relauch. Nothing in the logs accessible via portainer so not sure what the issue is.
+
+`docker container run -it --rm --user root docker.service:5000/daex-meta/freeipa-server:latest bash` seems to start the container with no issues...
+
+navigating to `stacks/freeipa` and running `docker-compose up` gives the following error:
+
+> ERROR: Version in "./docker-compose.yml" is unsupported. You might be seeing this error because you're using the wrong Compose file version. Either specify a supported version (e.g "2.2" or "3.3") and place your service definitions under the `services` key, or omit the `version` key and place your service definitions at the root of the file to use version 1.
+
+So, is it too old or too new? what version of docker-compose does this laptop have....? `docker-compose --version` gives `1.17.1`, which looking at the docker/compose [changelog](https://github.com/docker/compose/blob/master/CHANGELOG.md#1171-2017-11-08) appears to be from 2017... Feels like this might be an issue!
+
+`apt-cache show docker-compose` shows something that makes it look like its coming from the official ubuntu repos, so I think to get a newer version I need to update ubuntu?
+
+### After update...
+
+Still no dice. 
+
+### Debugging Freeipa
+Looking at the github repo for the freeipa dockerfiles there is a section on [Debugging](https://github.com/adelton/freeipa-container#debugging) that might give some hints.
+
+Have added environment debug tags into the compose file and I can now see the following:
+
+> The ipa-server-install command failed. See /var/log/ipaserver-install.log for more information
+
+> 2021-08-11T16:07:57Z DEBUG The ipa-server-install command failed, exception: RuntimeError: IPv6 stack is enabled in the kernel but there is no interface that has ::1 address assigned. Add ::1 address resolution to 'lo' interface. You might need to enable IPv6 on the interface 'lo' in sysctl.conf.
+2021-08-11T16:07:57Z ERROR IPv6 stack is enabled in the kernel but there is no interface that has ::1 address assigned. Add ::1 address resolution to 'lo' interface. You might need to enable IPv6 on the interface 'lo' in sysctl.conf.
+
+
+which is more informative! It also points me at this blog, where it looks like the error is something to do with (not) [disabling ip v6](https://osric.com/chris/accidental-developer/2017/10/ipa-server-upgrade-ipv6-stack-is-enabled-in-the-kernel-but-there-is-no-interface-that-has-1-address-assigned/)
+
+There is already something in the compose file about this:
+```
+sysctls:
+      - net.ipv6.conf.all.disable_ipv6=0  
+```
+
+indeed, it is mentioned in the docs for the container: https://hub.docker.com/r/adelton/freeipa-server.
+
+so why is it still happening?!
+
+Using the debug option to not exit, we can drop into a shell on the container using portainer. This allows us to execute commands inside the container.
+
+It appears that the sysctls option in the docker-compose file is not having any effect.
+
+> [root@ipa /]# sysctl -a | grep net.ipv6.conf.all.disable
+net.ipv6.conf.all.disable_ipv6 = 1
+net.ipv6.conf.all.disable_policy = 0
+
+sysctls has been supported in docker swarm since v
+
+https://docs.docker.com/compose/compose-file/compose-file-v3/#sysctls
+
+supported sysctls include `net.*` 
+https://docs.docker.com/engine/reference/commandline/run/#configure-namespaced-kernel-parameters-sysctls-at-runtime 
+
+but it looks like perhaps portainer has had some issues using them?
+https://github.com/portainer/portainer/issues/3551
+https://github.com/portainer/portainer/issues/2756
+
+looking at the portainer container page, it appears portainer/portainer has been deprecated in favour of portainer/portainer-ce. Updated the dockerfile & docker compose.
+
+### Updated portainer & started again
+
+Now freeipa sttarts and doesnt crash :)
+
+
 ## now what?
 
 got nginx up and running, and think the next step is to get jenkins to build other services & deploy them via portainer, but not sure how to kick it off
-
 
 can get to jenkins at 127.0.0.1:8081
 
@@ -217,5 +284,15 @@ there is a makefile that looks useful in daex-ldap but this clones things from g
 
 gitlab is at 127.0.0.1:8082 but doesnt seem to want to let you log in - think this is because its http not https? 
 
-freeipa looks like it is stuck in a loop - no error messages
+It works if you rewrite each url to http, but really we need to get https working I think.
 
+feel like I should be doing something via the webui. lets take a look at what nginx is hosting.
+
+We copied two folder to it:
+
+* nginx/nginx/ to /etc/nginx 
+* nginx/html/ to /usr/share/nginx/html
+
+The nginx/nginx contains the config that proxies the gitlab/freeipa/jenkins boxes but I think these config files need some modification
+
+stacks/nginx/nginx/conf.d/freeipa.conf

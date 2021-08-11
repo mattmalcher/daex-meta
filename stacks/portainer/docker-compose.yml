@@ -18,7 +18,7 @@ services:
       placement:
         constraints: [node.platform.os == linux]
   portainer:
-    image: docker.service:5000/portainer/portainer
+    image: docker.service:5000/portainer/portainer-ce
     command: -H tcp://tasks.agent:9001 --tlsskipverify
     volumes:
       - data:/data
